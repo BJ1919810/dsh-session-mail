@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import { after, before, describe, it } from 'node:test';
-import { apply, TOOL_NAME } from '../lib/index.js';
+import { apply, READ_TOOL_NAME, TOOL_NAME } from '../lib/index.js';
 import { deliver, formatMessage, mintCookie, resolveBaseUrl } from '../lib/mail.js';
 
 const SECRET = randomBytes(32).toString('base64url');
@@ -20,6 +20,53 @@ function startHost() {
         headers: request.headers,
         body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
       });
+      const method = received.at(-1).body?.method;
+      if (method === 'session/projections') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+          type: 'server-response',
+          rpcId: received.at(-1).body.rpcId,
+          result: {
+            ok: true,
+            value: {
+              kind: 'sequenced',
+              asOfSeq: 42,
+              values: {
+                title: 'peer session title',
+                turnOutline: [
+                  { turn: 1, seq: 6, prompt: 'p1', response: 'first reply' },
+                  { turn: 2, seq: 30, prompt: 'p2', response: 'second reply' },
+                  { turn: 3, seq: 40, prompt: 'p3', response: '' },
+                ],
+              },
+            },
+          },
+        }));
+        return;
+      }
+      if (method === 'session/page') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({
+          type: 'server-response',
+          rpcId: received.at(-1).body.rpcId,
+          result: {
+            ok: true,
+            value: {
+              hasMore: false,
+              records: [
+                { type: 'event', event: { type: 'tool/call', seq: 20, time: 1700000000000,
+                  data: { name: 'present', arguments: JSON.stringify({ files: [{ path: 'old.txt', description: 'old' }] }) } } },
+                { type: 'event', event: { type: 'tool/call', seq: 41, time: 1700000100000,
+                  data: { name: 'present', arguments: JSON.stringify({ files: [
+                    { path: 'out/report.md', description: 'the report' },
+                    { path: 'out/chart.png', description: 'the chart' },
+                  ] }) } } },
+              ],
+            },
+          },
+        }));
+        return;
+      }
       const accepted = received.at(-1).body?.payload?.args?.request?.sessionId === 'session-target';
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({
@@ -262,5 +309,51 @@ describe('plugin', () => {
     const { ctx, registered } = fakeContext();
     apply(ctx, { enabled: false, baseUrl: host.baseUrl });
     assert.equal(registered.has(TOOL_NAME), false);
+  });
+});
+
+describe('read_session_info', () => {
+  let host;
+  before(async () => { host = await startHost(); });
+  after(async () => { await host.close(); });
+  it('returns only the title when asked for the title', async () => {
+    const { ctx, registered } = fakeContext();
+    apply(ctx, { baseUrl: host.baseUrl });
+    const tool = registered.get(READ_TOOL_NAME);
+    const value = await tool.execute({ sessionId: 'session-peer', what: 'title' }, {});
+    assert.equal(value.title, 'peer session title');
+    assert.equal(value.lastReply, undefined);
+    assert.equal(value.lastPresent, undefined);
+  });
+
+  it('picks the last non-empty reply of the turn outline', async () => {
+    const { ctx, registered } = fakeContext();
+    apply(ctx, { baseUrl: host.baseUrl });
+    const tool = registered.get(READ_TOOL_NAME);
+    const value = await tool.execute({ sessionId: 'session-peer', what: 'last_reply' }, {});
+    assert.equal(value.lastReply, 'second reply');
+    assert.equal(value.title, undefined);
+  });
+
+  it('finds the last present call and its files', async () => {
+    const { ctx, registered } = fakeContext();
+    apply(ctx, { baseUrl: host.baseUrl });
+    const tool = registered.get(READ_TOOL_NAME);
+    const value = await tool.execute({ sessionId: 'session-peer', what: 'last_present' }, {});
+    assert.deepEqual(value.lastPresent.files, [
+      { path: 'out/report.md', description: 'the report' },
+      { path: 'out/chart.png', description: 'the chart' },
+    ]);
+    assert.match(value.lastPresent.when, /^\d{4}-\d{2}-\d{2}T/u);
+  });
+
+  it('returns everything by default', async () => {
+    const { ctx, registered } = fakeContext();
+    apply(ctx, { baseUrl: host.baseUrl });
+    const tool = registered.get(READ_TOOL_NAME);
+    const value = await tool.execute({ sessionId: 'session-peer' }, {});
+    assert.equal(value.title, 'peer session title');
+    assert.equal(value.lastReply, 'second reply');
+    assert.equal(value.lastPresent.files.length, 2);
   });
 });

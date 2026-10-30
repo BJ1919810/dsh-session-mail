@@ -25,6 +25,23 @@ The first line carries the sender's session id, so the receiving agent knows the
 | `message` | string | The text to say. The plugin prepends the `From` header. |
 | `urgent` | boolean | `false` (default) — send in order: the message waits for the target's current turn to end. `true` — interject: the message is injected into the target's running turn right away. |
 
+## The other tool: `read_session_info`
+
+Reading another session is read-only: it does not resume the target and delivers nothing to it.
+
+`read_session_info`
+
+| argument | type | meaning |
+| --- | --- | --- |
+| `sessionId` | string | Target session id. |
+| `what` | `title` \| `last_reply` \| `last_present` \| `all` | Which field to fetch; `all` is the default. |
+
+- `title` — the session title, from `session/projections`.
+- `last_reply` — the final assistant message of the last completed turn (`turnOutline`, last non-empty `response`). A turn that is still running has an empty response, so it is skipped.
+- `last_present` — the last `present` tool call of the session: the files it declared as deliverables with their descriptions, found by paging back through `session/page` (the cold-safe history route) and reading the raw `tool/call` events.
+
+Both routes answer for a cold session: `session/projections` returned the title of a session whose agent was not running, and `session/page` returned its events.
+
 ## Queue or interject: `urgent`
 
 `urgent` picks how the message is handed to the target session:
@@ -219,6 +236,23 @@ From <发信方 sessionID> ：
 | `toSessionId` | string | 目标会话 id（`session-<32 位十六进制>`）。回信时填 `From` 抬头里的那个 id。 |
 | `message` | string | 要说的话（正文）。插件会自动加 `From` 抬头。 |
 | `urgent` | boolean | `false`（默认）＝顺序发送，等对方当前回合结束再送达；`true`＝插话，立刻插进对方正在跑的回合。 |
+
+## 另一个工具：`read_session_info`
+
+读别的会话是**只读**的：不会唤起目标会话，也不会向它投递任何东西。
+
+`read_session_info`
+
+| 参数 | 类型 | 含义 |
+| --- | --- | --- |
+| `sessionId` | string | 目标会话 id。 |
+| `what` | `title` \| `last_reply` \| `last_present` \| `all` | 取哪一项；默认 `all`。 |
+
+- `title` —— 会话名，来自 `session/projections`。
+- `last_reply` —— 最后一个**已完成**回合的最终回复（`turnOutline` 里最后一个非空 `response`）。还在跑的回合 `response` 是空的，会被跳过。
+- `last_present` —— 该会话最后一次 `present` 工具调用：它声明为交付物的文件 + 每个文件的描述；靠 `session/page`（冷安全的历史路由）往回翻原始 `tool/call` 事件找到。
+
+两条路由对**冷会话**都有效：实测 `session/projections` 能取到未运行会话的标题，`session/page` 能取到它的事件。
 
 ## 顺序发送还是插话：`urgent`
 
