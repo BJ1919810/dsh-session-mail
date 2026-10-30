@@ -316,6 +316,29 @@ describe('read_session_info', () => {
   let host;
   before(async () => { host = await startHost(); });
   after(async () => { await host.close(); });
+
+  it('keeps every schema node single-typed (the host rejects type arrays)', () => {
+    // The fake host does not validate schemas, so this regression guard reads
+    // the registered definitions the way the host's assertSupportedJsonSchema
+    // does: a node with `type` must carry one type string, never an array.
+    const { ctx, registered } = fakeContext();
+    apply(ctx, { baseUrl: host.baseUrl });
+    const walk = (node, path) => {
+      if (node === null || typeof node !== 'object') return;
+      if (Array.isArray(node)) {
+        node.forEach((child, index) => walk(child, `${path}[${index}]`));
+        return;
+      }
+      if (Object.hasOwn(node, 'type')) {
+        assert.equal(typeof node.type, 'string', `${path}.type must be a single type string`);
+      }
+      for (const [key, value] of Object.entries(node)) walk(value, `${path}.${key}`);
+    };
+    for (const tool of registered.values()) {
+      walk(tool.parameters, `${tool.name}.parameters`);
+      walk(tool.output?.schema, `${tool.name}.output.schema`);
+    }
+  });
   it('returns only the title when asked for the title', async () => {
     const { ctx, registered } = fakeContext();
     apply(ctx, { baseUrl: host.baseUrl });
