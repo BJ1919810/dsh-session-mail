@@ -1,0 +1,8 @@
+# Bundle patch for dsh-session-mail.
+#
+# The loader applies this insert on top of the active profile, so installing
+# the package is enough to get the tool. A local profile can also insert the
+# entry by hand (see README).
+- insert:
+    - id: dsh-session-mail
+      name: dsh-session-mail

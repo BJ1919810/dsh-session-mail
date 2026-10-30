@@ -1,0 +1,52 @@
+{
+  "name": "dsh-session-mail",
+  "version": "0.1.0",
+  "description": "Send messages between DSH sessions — an agent in one session can talk to the agent in another session of the same host.",
+  "description_zh": "DSH 会话之间互发消息：一个会话里的代理可以把话发给同一宿主里另一个会话的代理，对方再按同样约定回话。",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "deepseek",
+    "harness",
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "plugin",
+    "session",
+    "intercom"
+  ],
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./mail": {
+      "default": "./lib/mail.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "scripts/install.mjs"
+  ],
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "check": "node --check lib/index.js && node --check lib/mail.js && node --test \"test/*.test.js\""
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "compatibility": {
+      "dshReleases": {
+        "0.2.0-rc.2": "compatible"
+      }
+    }
+  }
+}
