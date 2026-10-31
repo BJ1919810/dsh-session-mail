@@ -34,7 +34,7 @@ Reading another session is read-only: it does not resume the target and delivers
 | argument | type | meaning |
 | --- | --- | --- |
 | `sessionId` | string | Target session id. |
-| `what` | `title` \| `last_reply` \| `last_present` \| `all` | Which field to fetch; `all` is the default. |
+| `what` | `title` \| `last_reply` \| `last_present` \| `status` \| `all` | Which field to fetch; `all` is the default (`status` is fetch-only, so `all` leaves it out). |
 
 - `title` — the session title, from `session/projections`.
 - `last_reply` — the final assistant message of the last completed turn (`turnOutline`, last non-empty `response`). A turn that is still running has an empty response, so it is skipped.
@@ -260,7 +260,7 @@ From <发信方 sessionID> ：
 | 参数 | 类型 | 含义 |
 | --- | --- | --- |
 | `sessionId` | string | 目标会话 id。 |
-| `what` | `title` \| `last_reply` \| `last_present` \| `all` | 取哪一项；默认 `all`。 |
+| `what` | `title` \| `last_reply` \| `last_present` \| `status` \| `all` | 取哪一项；默认 `all`（`status` 只在明确要时返回，不并进 `all`）。 |
 
 - `title` —— 会话名，来自 `session/projections`。
 - `last_reply` —— 最后一个**已完成**回合的最终回复（`turnOutline` 里最后一个非空 `response`）。还在跑的回合 `response` 是空的，会被跳过。
