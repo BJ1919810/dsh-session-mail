@@ -491,3 +491,23 @@ describe('status', () => {
     assert.equal(value.lastInbound, undefined);
   });
 });
+
+describe('status rendering', () => {
+  let host;
+  before(async () => { host = await startHost(); });
+  after(async () => { await host.close(); });
+
+  it('prints busy state, queue depth and the last inbound', async () => {
+    host.state.pageRecords = [
+      { type: 'event', event: { type: 'tool/call', seq: 12, time: 1700000002000, data: { name: 'ops_bash', arguments: '{}' } } },
+    ];
+    host.state.inbox = { 'next-turn': [], 'next-step': [] };
+    const { ctx, registered } = fakeContext();
+    apply(ctx, { baseUrl: host.baseUrl });
+    const tool = registered.get(READ_TOOL_NAME);
+    const value = await tool.execute({ sessionId: 'session-peer', what: 'status' }, {});
+    const text = tool.output.render({}, value)[0].text;
+    assert.match(text, /Status: busy/u);
+    assert.match(text, /Queued: 0 next-turn, 0 next-step/u);
+  });
+});
