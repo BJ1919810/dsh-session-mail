@@ -42,6 +42,20 @@ Reading another session is read-only: it does not resume the target and delivers
 
 Both routes answer for a cold session: `session/projections` returned the title of a session whose agent was not running, and `session/page` returned its events.
 
+### Message ids, threads and recalls
+
+Every message carries a `[mail m-xxxxxxxx …]` line under the `From` header. That id is what the other side quotes in `replyTo`, and what you pass in `supersedes`.
+
+| argument | effect |
+| --- | --- |
+| `replyTo` | marks the message as an answer; the id shows up in the metadata line |
+| `thread` | a task name. While a message with the same thread is still pending for that session, a second one returns `skipped` with `dedupe: "pending-thread"` and the earlier id in `prior` |
+| `supersedes` | ids of earlier messages that are no longer valid. Still-pending ones are removed before this message is queued (`superseded`); already-delivered ones come back in `notRecalled` |
+
+Only still-pending messages can be recalled: the host has no way to rewrite a message that already landed. The plugin remembers the bodies it sent in this process, so a restart forgets them and `notRecalled` is the honest answer.
+
+`read_session_info(sessionId, "status")` answers "is the peer busy, and what is queued": `busy` (the last event of the session is not `turn/end`), `queuedNextTurn` / `queuedNextStep`, `lastEvent`, `lastInbound` (the most recent mail it received, with its id) and `lastOutbound` (the most recent mail this process sent to it).
+
 ## Queue or interject: `urgent`
 
 `urgent` picks how the message is handed to the target session:
@@ -253,6 +267,20 @@ From <发信方 sessionID> ：
 - `last_present` —— 该会话最后一次 `present` 工具调用：它声明为交付物的文件 + 每个文件的描述；靠 `session/page`（冷安全的历史路由）往回翻原始 `tool/call` 事件找到。
 
 两条路由对**冷会话**都有效：实测 `session/projections` 能取到未运行会话的标题，`session/page` 能取到它的事件。
+
+### 消息 id / thread / 撤回
+
+每条消息在 `From` 抬头下面带一行 `[mail m-xxxxxxxx …]`。这个 id 就是对方在 `replyTo` 里引用的，也是你传给 `supersedes` 的。
+
+| 参数 | 效果 |
+| --- | --- |
+| `replyTo` | 标记这是对哪条的回复；id 会出现在元信息行里 |
+| `thread` | 任务名。**同一 thread 的消息还在对方队列里时**，再发一条会返回 `skipped` + `dedupe: "pending-thread"`，`prior` 给出前一条的 id |
+| `supersedes` | 已失效的旧消息 id。**仍在排队的**会在新消息入队前被移除（`superseded`）；**已投递的撤不回**，会出现在 `notRecalled` 里 |
+
+只有"还没投递"的消息能撤回：宿主没有改写已落地消息的途径。插件只在**本进程**里记着自己发过的正文，重启就忘 —— 那种情况下 `notRecalled` 是诚实的答案。
+
+`read_session_info(sessionId, "status")` 回答"对方忙不忙、队列里有什么"：`busy`（会话最后一条事件不是 `turn/end`）、`queuedNextTurn` / `queuedNextStep`、`lastEvent`、`lastInbound`（它最近收到的一封邮件，带 id）、`lastOutbound`（本进程最近发给它的一封）。
 
 ## 顺序发送还是插话：`urgent`
 

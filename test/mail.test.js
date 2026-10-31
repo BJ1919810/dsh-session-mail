@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
-import { after, before, describe, it } from 'node:test';
+import { after, before, beforeEach, describe, it } from 'node:test';
 import { apply, READ_TOOL_NAME, TOOL_NAME } from '../lib/index.js';
 import { deliver, formatMessage, mintCookie, resolveBaseUrl } from '../lib/mail.js';
 
@@ -10,6 +10,7 @@ const SECRET = randomBytes(32).toString('base64url');
 /** A host that answers one prompt the way the real host does. */
 function startHost() {
   const received = [];
+  const state = { inbox: { 'next-turn': [], 'next-step': [] } };
   const server = createServer((request, response) => {
     const chunks = [];
     request.on('data', (chunk) => chunks.push(chunk));
@@ -33,6 +34,7 @@ function startHost() {
               asOfSeq: 42,
               values: {
                 title: 'peer session title',
+              inbox: state.inbox,
                 turnOutline: [
                   { turn: 1, seq: 6, prompt: 'p1', response: 'first reply' },
                   { turn: 2, seq: 30, prompt: 'p2', response: 'second reply' },
@@ -44,26 +46,30 @@ function startHost() {
         }));
         return;
       }
-      if (method === 'session/page') {
+      if (method === 'session/updateQueue') {
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({
           type: 'server-response',
           rpcId: received.at(-1).body.rpcId,
-          result: {
-            ok: true,
-            value: {
-              hasMore: false,
-              records: [
-                { type: 'event', event: { type: 'tool/call', seq: 20, time: 1700000000000,
-                  data: { name: 'present', arguments: JSON.stringify({ files: [{ path: 'old.txt', description: 'old' }] }) } } },
-                { type: 'event', event: { type: 'tool/call', seq: 41, time: 1700000100000,
-                  data: { name: 'present', arguments: JSON.stringify({ files: [
-                    { path: 'out/report.md', description: 'the report' },
-                    { path: 'out/chart.png', description: 'the chart' },
-                  ] }) } } },
-              ],
-            },
-          },
+          result: { ok: true, value: {} },
+        }));
+        return;
+      }
+      if (method === 'session/page') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        const records = state.pageRecords ?? [
+          { type: 'event', event: { type: 'tool/call', seq: 20, time: 1700000000000,
+            data: { name: 'present', arguments: JSON.stringify({ files: [{ path: 'old.txt', description: 'old' }] }) } } },
+          { type: 'event', event: { type: 'tool/call', seq: 41, time: 1700000100000,
+            data: { name: 'present', arguments: JSON.stringify({ files: [
+              { path: 'out/report.md', description: 'the report' },
+              { path: 'out/chart.png', description: 'the chart' },
+            ] }) } } },
+        ];
+        response.end(JSON.stringify({
+          type: 'server-response',
+          rpcId: received.at(-1).body.rpcId,
+          result: { ok: true, value: { hasMore: false, records } },
         }));
         return;
       }
@@ -82,6 +88,7 @@ function startHost() {
       resolve({
         server,
         received,
+        state,
         baseUrl: `http://127.0.0.1:${port}`,
         close: () => new Promise((done) => server.close(done)),
       });
@@ -229,11 +236,13 @@ describe('plugin', () => {
       { agent: { id: 'session-sender', session: { id: 'session-sender' } } },
     );
     assert.equal(result.delivered, true);
-    assert.equal(result.body, 'From session-sender ：\n在吗？');
+    assert.match(result.msgId, /^m-[0-9a-f]{8}$/u);
+    assert.ok(result.body.startsWith('From session-sender ：\n[mail m-'));
+    assert.ok(result.body.endsWith('\n在吗？'));
     const sent = host.received.at(-1).body.payload.args.request;
     assert.equal(sent.sessionId, 'session-target');
     assert.equal(sent.mode, 'queue');
-    assert.deepEqual(sent.content, [{ type: 'text', text: 'From session-sender ：\n在吗？' }]);
+    assert.equal(sent.content[0].text, result.body);
   });
 
   it('sends in order by default and interrupts when urgent', async () => {
@@ -378,5 +387,107 @@ describe('read_session_info', () => {
     assert.equal(value.title, 'peer session title');
     assert.equal(value.lastReply, 'second reply');
     assert.equal(value.lastPresent.files.length, 2);
+  });
+});
+describe('message ids, threads and recalls', () => {
+  let host;
+  before(async () => { host = await startHost(); });
+  after(async () => { await host.close(); });
+  beforeEach(() => { host.state.inbox = { 'next-turn': [], 'next-step': [] }; });
+
+  const call = (args, tool) =>
+    tool.execute(args, { agent: { id: 'session-sender', session: { id: 'session-sender' } } });
+
+  it('shows replyTo and thread in the metadata line', async () => {
+    const { ctx, registered } = fakeContext();
+    apply(ctx, { baseUrl: host.baseUrl });
+    const result = await call({ toSessionId: 'session-target', message: '收到', replyTo: 'm-11112222', thread: 'L293' }, registered.get(TOOL_NAME));
+    assert.match(result.body, /\[mail m-[0-9a-f]{8} · thread L293 · reply m-11112222\]/u);
+  });
+
+  it('skips a second message with the same thread while the first is pending', async () => {
+    host.state.inbox = {
+      'next-turn': [{ id: 'q-1', role: 'user', source: { kind: 'user', rpcId: 'x' },
+        content: [{ type: 'text', text: 'From session-a ：\n[mail m-aaaaaaaa · thread L293]\n做活' }] }],
+      'next-step': [],
+    };
+    const { ctx, registered } = fakeContext();
+    apply(ctx, { baseUrl: host.baseUrl });
+    const result = await call({ toSessionId: 'session-target', message: '再做一遍', thread: 'L293' }, registered.get(TOOL_NAME));
+    assert.equal(result.skipped, true);
+    assert.equal(result.delivered, false);
+    assert.equal(result.dedupe, 'pending-thread');
+    assert.equal(result.prior, 'm-aaaaaaaa');
+  });
+
+  it('recalls a still-pending message by id', async () => {
+    const { ctx, registered } = fakeContext();
+    apply(ctx, { baseUrl: host.baseUrl });
+    const tool = registered.get(TOOL_NAME);
+    const first = await call({ toSessionId: 'session-target', message: '旧指令' }, tool);
+    host.state.inbox = {
+      'next-turn': [{ id: 'q-2', role: 'user', source: { kind: 'user', rpcId: 'x' },
+        content: [{ type: 'text', text: first.body }] }],
+      'next-step': [],
+    };
+    const second = await call({ toSessionId: 'session-target', message: '新指令', supersedes: [first.msgId] }, tool);
+    assert.deepEqual(second.superseded, [first.msgId]);
+    const recall = host.received.filter((entry) => entry.body.method === 'session/updateQueue').at(-1);
+    assert.equal(recall.body.payload.args.request.itemId, 'q-2');
+    assert.deepEqual(recall.body.payload.args.request.action, { kind: 'remove' });
+  });
+
+  it('reports an id it cannot recall', async () => {
+    const { ctx, registered } = fakeContext();
+    apply(ctx, { baseUrl: host.baseUrl });
+    const result = await call({ toSessionId: 'session-target', message: 'x', supersedes: ['m-deadbeef'] }, registered.get(TOOL_NAME));
+    assert.deepEqual(result.notRecalled, ['m-deadbeef']);
+  });
+});
+describe('status', () => {
+  let host;
+  before(async () => { host = await startHost(); });
+  after(async () => { await host.close(); });
+
+  const status = async (tool) => (await tool.execute({ sessionId: 'session-peer', what: 'status' }, {})).status;
+
+  it('reports idle after a completed turn', async () => {
+    host.state.pageRecords = [
+      { type: 'event', event: { type: 'user/message', seq: 9, time: 1700000000000,
+        data: { content: [{ type: 'text', text: 'From session-peer ：' + '\n' + '[mail m-bbbbbbbb]' + '\n' + 'hi' }] } } },
+      { type: 'event', event: { type: 'turn/end', seq: 10, time: 1700000001000, data: { reason: { kind: 'completed' } } } },
+    ];
+    const { ctx, registered } = fakeContext();
+    apply(ctx, { baseUrl: host.baseUrl });
+    const value = await status(registered.get(READ_TOOL_NAME));
+    assert.equal(value.busy, false);
+    assert.equal(value.lastEvent, 'turn/end');
+    assert.equal(value.lastInbound, 'm-bbbbbbbb session-peer ：');
+    assert.equal(value.queuedNextTurn, 0);
+  });
+
+  it('reports busy while a turn is running', async () => {
+    host.state.pageRecords = [
+      { type: 'event', event: { type: 'tool/call', seq: 12, time: 1700000002000, data: { name: 'ops_bash', arguments: '{}' } } },
+    ];
+    const { ctx, registered } = fakeContext();
+    apply(ctx, { baseUrl: host.baseUrl });
+    const value = await status(registered.get(READ_TOOL_NAME));
+    assert.equal(value.busy, true);
+    assert.equal(value.lastEvent, 'tool/call');
+  });
+
+  it('counts the pending queue', async () => {
+    host.state.pageRecords = [];
+    host.state.inbox = {
+      'next-turn': [{ id: 'q-1', role: 'user', source: { kind: 'user', rpcId: 'x' }, content: [{ type: 'text', text: 'a' }] }],
+      'next-step': [{ id: 'q-2', role: 'user', source: { kind: 'user', rpcId: 'y' }, content: [{ type: 'text', text: 'b' }] }],
+    };
+    const { ctx, registered } = fakeContext();
+    apply(ctx, { baseUrl: host.baseUrl });
+    const value = await status(registered.get(READ_TOOL_NAME));
+    assert.equal(value.queuedNextTurn, 1);
+    assert.equal(value.queuedNextStep, 1);
+    assert.equal(value.lastInbound, undefined);
   });
 });
