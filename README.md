@@ -164,7 +164,7 @@ A `dsh-plugin.json` manifest is **not** required by this marketplace (a publishe
 node --test test/mail.test.js
 ```
 
-17 assertions: message format, cookie minting, the request envelope, queue/steer modes, the request-id marker, the tool registration and the disabled path.
+17 assertions: message format, delivery through the controller service, queue/steer modes, the request-id marker, thread dedupe, recalls, the read tool, and the schema guard.
 
 All three spellings work on Node 26.8.1 — `node --test`, `node --test test/` and the explicit file. The explicit file form is the one to put in CI: on Node 24 (the runtime DSH itself ships) the directory form fails with `Cannot find module '…\test'` and reports `fail 1`, which looks like a red suite but is an invocation error.
 
@@ -195,7 +195,7 @@ node <DSH_HOME>/tools/dsh-api.mjs --method session/prompt --payload-file payload
  "content":[{"type":"text","text":"From <your session id> ：\n<your text>"}]}}
 ```
 
-Two things matter here: the `From` header is **not** added for you, so write it yourself or the receiver cannot tell who sent it; and the cookie the CLI mints comes from the `client-connection/browser-session` credential record.
+Two things matter here: the `From` header is **not** added for you, so write it yourself or the receiver cannot tell who sent it; and since DSH 0.2.2-rc.1 this CLI route no longer works as written — `/api` now accepts only a v2 operator credential minted through `GET /connect?token=<launchToken>`, so the SDK path below is the supported one.
 
 ## Finding a session id
 
@@ -203,24 +203,28 @@ Do **not** look it up with the `session/list` API: it returns the complete proje
 
 ## How it delivers
 
-The plugin uses the host's own RPC route, the same one the GUI uses:
+The plugin runs inside the host, so it calls the `sessionController` service in-process — no Web route, no cookie, no token:
 
-```
-POST http://127.0.0.1:<port>/api/session/prompt
-{"type":"client-request","rpcId":"…","method":"session/prompt",
- "payload":{"args":{"request":{"requestId":"…","sessionId":"…","mode":"queue",
-                        "content":[{"type":"text","text":"From … ：\n…"}]}}}}
+```js
+const controller = toolsCtx.sessionController;          // declared via ctx.inject(['tools','sessionController'])
+await controller.prompt({
+  sessionId, requestId,                                  // requestId lands as data.source.rpcId
+  mode: 'queue',                                         // or 'steer'
+  content: [{ type: 'text', text: body }],
+}, new AbortController().signal);                        // the second parameter is a signal, not a source
 ```
 
-`/api` requests are authenticated with the host's signed browser-session cookie: the name is `dsh-auth-` + base64url(sha256(`host:port`)) and the value is `v1.<base64url(payload)>.<base64url(HMAC-SHA256(secret, body))>`, where the secret is the `client-connection/browser-session` credential record and must be base64url-decoded before it is used as the HMAC key.
+The host builds the recorded source itself — `{ kind: 'user', rpcId: request.requestId }` — so the `dsh-session-mail:` marker in `requestId` is what makes a delivered message machine-distinguishable. Reads use the same service: `projections(request, signal)` and `events(request, signal)` (`page` is deprecated in 0.2.2-rc.1), and a recall uses `updateQueue(request)`.
 
 Because the delivery goes through the host's own route, the target session is resumed with its own agent preset, the next model request uses that session's recorded model, and the message lands in its durable log.
+
+Why not HTTP: through 0.2.1 a self-minted browser-session cookie authenticated `/api`, and the plugin used it. 0.2.2-rc.1 changed `/api` to accept only a v2 operator credential from `GET /connect?token=<launchToken>`, and that launch token is per-process — not in the credential store. In-process service calls sidestep the whole question.
 
 ## Limits
 
 - Target session must live in the same DSH host; a second app instance has its own sessions.
 - One session can be busy in one turn at a time; a queued message is delivered when the turn ends.
-- The plugin needs the host's web server mounted (desktop and web profiles have it).
+- The plugin needs the host's `sessionController` service (mounted in every running host; it no longer needs the web server).
 
 ---
 
@@ -387,7 +391,7 @@ type === 'user/message'  &&  data.content[0].text.startsWith('From session-')
 node --test test/mail.test.js
 ```
 
-17 条断言：消息格式、cookie 铸造、请求信封、queue/steer 两种模式、requestId 标记、工具注册、关闭态。
+17 条断言：消息格式、走 controller 投递、queue/steer 两种模式、requestId 标记、thread 判重、撤回、读取工具、schema 单类型守卫。
 
 Node 26.8.1 上三种写法都通 —— `node --test`、`node --test test/`、直接指定文件。CI 里请用**直接指定文件**那种：Node 24（DSH 自带的就是它）下传目录会报 `Cannot find module '…\test'` 并汇总成 `fail 1`，看着像全红，其实是调用形式不对。
 
@@ -419,7 +423,7 @@ node <DSH_HOME>/tools/dsh-api.mjs --method session/prompt --payload-file payload
  "content":[{"type":"text","text":"From <你的 session id> ：\n<正文>"}]}}
 ```
 
-两点要注意：`From` 抬头**不会**自动加，得自己写，否则对方认不出是谁发的；CLI 签 cookie 用的是 `client-connection/browser-session` 那条凭据记录。
+两点要注意：`From` 抬头**不会**自动加，得自己写，否则对方认不出是谁发的；另外自 DSH 0.2.2-rc.1 起这条 CLI 路子已经**不通**（`/api` 只认 `GET /connect?token=<launchToken>` 换来的 v2 凭据），请用下面的进程内调用。
 
 ## 怎么找会话 id
 
@@ -428,13 +432,21 @@ node <DSH_HOME>/tools/dsh-api.mjs --method session/prompt --payload-file payload
 
 ## 投递原理
 
-走宿主自己的 RPC 路由（GUI 用的同一条）：
+插件跑在宿主进程里，直接调 `sessionController` 服务 —— 没有 Web 路由、没有 cookie、没有 token：
 
-```
-POST http://127.0.0.1:<port>/api/session/prompt
+```js
+const controller = toolsCtx.sessionController;          // 由 ctx.inject(['tools','sessionController']) 声明
+await controller.prompt({
+  sessionId, requestId,                                  // requestId 会成为 data.source.rpcId
+  mode: 'queue',                                         // 或 'steer'
+  content: [{ type: 'text', text: body }],
+}, new AbortController().signal);                        // 第二个参数是 signal，不是 source
 ```
 
-`/api` 的认证是宿主签的浏览器会话 cookie：名字 `dsh-auth-` + base64url(sha256(`host:port`))，值 `v1.<base64url(payload)>.<base64url(HMAC-SHA256(secret, body))>`，密钥是 `client-connection/browser-session` 那条凭据记录，**必须先 base64url 解码成字节**再当 HMAC 密钥。
+source 由宿主自己按 `request.requestId` 铸成 `{ kind:'user', rpcId }`，所以 `requestId` 里的 `dsh-session-mail:` 前缀就是"机器可判的来源标记"。
+读侧同样走服务：`projections(request, signal)`、`events(request, signal)`（0.2.2-rc.1 起 `page` 已 deprecated）；撤回走 `updateQueue(request)`。
+
+为什么不用 HTTP：0.2.1 之前自铸浏览器 cookie 就能认证 `/api`，插件当时就是这么做的；0.2.2-rc.1 改成只认 `GET /connect?token=<launchToken>` 换来的 v2 凭据，而 launchToken 是**每进程**的、不在凭据库里 —— 进程内调用直接绕开这一整层。
 
 因为走的是宿主自己的路由，目标会话会带着它自己的 agent preset 被唤醒，模型请求用它记录下来的选型，消息也会进它的持久化日志。
 
@@ -442,4 +454,4 @@ POST http://127.0.0.1:<port>/api/session/prompt
 
 - 目标会话必须在同一个宿主里；另一个应用实例有自己的一套会话。
 - 一个会话同一时刻只跑一个回合，排队的消息在回合结束后送达。
-- 插件需要宿主挂载 web server（desktop / web profile 都有）。
+- 插件需要宿主的 `sessionController` 服务（每个运行中的宿主都有；不再依赖 web server）。
