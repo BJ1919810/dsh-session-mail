@@ -15,6 +15,17 @@ From <sender session id> ：
 
 The first line carries the sender's session id, so the receiving agent knows the message came from another agent (not from the human) and knows where to answer. The receiving side needs no extra machinery: the message arrives as an ordinary prompt in the target session, and the tool description tells the model what the `From` header means.
 
+## The third tool: `create_session`
+
+Creates a conversation and returns its id, in-process through `sessionController.create`:
+
+| argument | meaning |
+| --- | --- |
+| `cwd` | directory the session runs in; omit for the host default |
+| `agentPreset` | optional preset name |
+
+It exists because the Web route is no longer usable for this: `POST /api/session/create` needs a v2 operator credential that only the per-process launch token can mint.
+
 ## The tool
 
 `send_session_message`
@@ -244,6 +255,17 @@ From <发信方 sessionID> ：
 ```
 
 第一行是发信方的 session id —— 收信方据此知道「这是另一个代理发来的，不是主人」，也知道自己该往哪儿回信。收信侧不需要额外机制：消息就是目标会话里的一条普通提示词，工具说明里写清了 `From` 抬头代表什么。
+
+## 第三个工具：`create_session`
+
+建一个会话并返回它的 id，走进程内的 `sessionController.create`：
+
+| 参数 | 含义 |
+| --- | --- |
+| `cwd` | 会话运行目录；省略则用宿主默认 |
+| `agentPreset` | 可选，指定 preset |
+
+之所以加它：Web 那条路已经不能用了 —— `POST /api/session/create` 要 v2 operator 凭据，而那只能用每进程的 launchToken 换。
 
 ## 工具
 

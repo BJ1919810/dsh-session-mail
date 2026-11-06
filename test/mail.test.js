@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
-import { apply, READ_TOOL_NAME, TOOL_NAME } from '../lib/index.js';
+import { apply, CREATE_TOOL_NAME, READ_TOOL_NAME, TOOL_NAME } from '../lib/index.js';
 import { formatMessage, newMailId } from '../lib/mail.js';
 
 const SENDER = { agent: { id: 'session-sender', session: { id: 'session-sender' } } };
@@ -37,6 +37,10 @@ function fakeController(state) {
     async events(request) {
       calls.push({ method: 'events', request });
       return { records: state.pageRecords ?? [], hasMore: false };
+    },
+    async create(request) {
+      calls.push({ method: 'create', request });
+      return { sessionId: 'session-created' };
     },
   };
 }
@@ -240,6 +244,27 @@ describe('read_session_info', () => {
     const value = await read.execute({ sessionId: 'session-peer', what: 'status' }, {});
     assert.equal(value.status.busy, false);
     assert.equal(value.status.lastInbound, 'm-bbbbbbbb session-peer ：');
+  });
+});
+
+describe('create_session', () => {
+  it('asks the controller for a new session and returns its id', async () => {
+    const controller = fakeController({ inbox: { 'next-turn': [], 'next-step': [] }, pageRecords: [] });
+    const { registered } = mount(controller);
+    const tool = registered.get(CREATE_TOOL_NAME);
+    const value = await tool.execute({ cwd: 'D:/work' }, {});
+    assert.equal(value.sessionId, 'session-created');
+    const call = controller.calls.find((entry) => entry.method === 'create');
+    assert.deepEqual(call.request, { cwd: 'D:/work' });
+    assert.match(tool.output.render({}, value)[0].text, /Created session-created/u);
+  });
+
+  it('omits empty options', async () => {
+    const controller = fakeController({ inbox: { 'next-turn': [], 'next-step': [] }, pageRecords: [] });
+    const { registered } = mount(controller);
+    await registered.get(CREATE_TOOL_NAME).execute({}, {});
+    const call = controller.calls.find((entry) => entry.method === 'create');
+    assert.deepEqual(call.request, {});
   });
 });
 
